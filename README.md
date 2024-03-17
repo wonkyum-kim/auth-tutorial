@@ -770,3 +770,160 @@ declare module 'next-auth' {
       return session;
     },
 ```
+
+# OAUTH
+
+먼저 auth.config.ts에서 프로바이더를 추가해준다.
+
+```ts
+export default {
+  providers: [
+    Github({
+      clientId: process.env.GITHUB_CLIENT_ID,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET,
+    }),
+    Google({
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    }),
+    Credentials({...})
+  ]
+} satisfies NextAuthConfig;
+```
+
+## Github
+
+Settings -> Developer settings -> OAuth Apps 클릭
+
+- Application name: auth-tutorial
+- Homepage URL: http://localhost:3000
+- Authorization callback URL: http://localhost:3000/api/auth/callback/github
+
+클라이언트 아이디와 시크릿을 .env에 넣는다.
+
+```
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+```
+
+## Google
+
+[Google Cloud Platform](https://console.cloud.google.com/)에 접속
+
+3:24분 부터
+
+TODO: 계정 추가 문제 발생. 나중에 해결해보기
+
+## 소셜 로그인 구현하기
+
+`import { signIn } from '@/auth'`는 서버 컴포넌트나 서버 액션에서만 사용할 수 있는데,
+
+`import { signIn } from 'next-auth/react'`는 클라이언트 컴포넌트에서 사용할 수 있다.
+
+```ts
+// social.tsx
+
+'use client';
+
+import { FcGoogle } from 'react-icons/fc';
+import { FaGithub } from 'react-icons/fa';
+import { Button } from '@/components/ui/button';
+import { signIn } from 'next-auth/react';
+import { DEFAULT_LOGIN_REDIRECT } from '@/routes';
+
+export function Social() {
+  const onClick = (provider: 'google' | 'github') => {
+    signIn(provider, {
+      callbackUrl: DEFAULT_LOGIN_REDIRECT,
+    });
+  };
+
+  return (
+    <div className='flex items-center w-full gap-x-2'>
+      <Button
+        size='lg'
+        className='w-full'
+        variant='outline'
+        onClick={() => onClick('google')}
+      >
+        <FcGoogle className='h-5 w-5' />
+      </Button>
+      <Button
+        size='lg'
+        className='w-full'
+        variant='outline'
+        onClick={() => onClick('github')}
+      >
+        <FaGithub className='h-5 w-5' />
+      </Button>
+    </div>
+  );
+}
+```
+
+이제 깃헙, 구글 버튼을 누르면 로그인 할 수 있게 된다.
+
+그리고 데이터베이스를 확인해보면 (npx prisma studio), 소셜 로그인 계정이 들어있는 것을 확인할 수 있다.
+
+그런데 구글이나 깃헙을 같은 이메일로 만들었다면 로그인이 안될 것이니 다른 계정으로 접속해야한다.
+
+## emailVerified
+
+OAuth로 로그인하면 이메일은 이미 확인된 것이므로 `emailVerified` 필드를 현재 시간으로 설정한다.
+
+여기서는 auth.js의 events를 사용한다.
+
+events는 비동기 함수로 응답을 반환하지 않지만, 로그를 기록하거나 사이드이펙트를 다룰 때 사용한다.
+
+linkAccount 이벤트는 OAuth 프로바이더가 새로운 사용자의 계정을 생성하거나 로그인할 때 발생한다.
+
+```ts
+// auth.ts
+  events: {
+    // OAuth 프로바이더가 계정을 생성하거나 로그인할 때 동작한다.
+    // emailVerified 필드를 현재 시간으로 설정한다.
+    async linkAccount({ user }) {
+      await db.user.update({
+        where: { id: user.id },
+        data: { emailVerified: new Date() },
+      });
+    },
+  },
+```
+
+## 커스텀 에러 페이지 만들기
+
+auth.ts에 error 발생 시 이동할 페이지를 만들어주면 된다.
+
+```ts
+// auth.ts
+  pages: {
+    signIn: '/auth/login',
+    error: '/auth/error',
+  },
+```
+
+그리고 routes.ts의 authRoutes에 추가해준다.
+
+```ts
+export const authRoutes = ['/auth/login', '/auth/register', '/auth/error'];
+```
+
+## OAuth 이메일 중복 문제
+
+그런데 구글이나 깃헙을 같은 이메일로 만들었다면 로그인이 안될 것이니 다른 계정으로 접속해야한다.
+
+이를 사용자에게 알려주려면 다음과 같이 한다.
+
+1. import { useSearchParams } from 'next/navigation';을 사용해서
+2. searchParams가 error인 것을 찾고
+3. OAuthAccountNotLinked와 같은지 확인한다.
+4. 사용자에게 보여준다.
+
+```ts
+const searchParams = useSearchParams();
+const urlError =
+  searchParams.get('error') === 'OAuthAccountNotLinked'
+    ? 'Email already in use with diffrent provider!'
+    : '';
+```
