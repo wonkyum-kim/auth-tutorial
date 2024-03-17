@@ -612,3 +612,161 @@ export default async function SettingsPage() {
   );
 }
 ```
+
+# callbacks
+
+## 데이터베이스 확인하기
+
+neon.tech에 접속하지 않고도 데이터베이스를 확인할 수 있다.
+
+```shell
+npx prisma studio
+```
+
+## jwt 콜백
+
+`auth.ts`의 jwt 콜백은 JSON 웹 토큰이 생성되거나(i.e. sign in) 업데이트 될 때(i.e. 클라이언트에서 세션에 접근할 때) 호출된다.
+
+반환 값은 암호화되고, 쿠키에 저장된다.
+
+## session 콜백
+
+session 콜백은 세션이 확인될 때마다 호출된다.
+
+기본적으로 토큰의 서브셋만 보안을 위해 반환된다.
+
+만약 jwt() 콜백을 통해 추가한 항목들을 사용가능하게 하려면, 클라이언트에서 사용할 수 있도록 여기서 명시적으로 전달한다.
+
+```ts
+import NextAuth from 'next-auth';
+import { PrismaAdapter } from '@auth/prisma-adapter';
+
+import { db } from '@/lib/db';
+import authConfig from '@/auth.config';
+
+export const {
+  handlers: { GET, POST },
+  auth,
+  signIn,
+  signOut,
+} = NextAuth({
+  callbacks: {
+    async session({ token, session }) {
+      // token의 일부만을 저장한 것이 session이다.
+      // 따라서 session에 token.sub까지 포함시키려면 직접 설정한다.
+      if (token.sub && session.user) {
+        session.user.id = token.sub;
+      }
+      return session;
+    },
+    async jwt({ token }) {
+      return token;
+    },
+  },
+  adapter: PrismaAdapter(db),
+  secret: process.env.AUTH_SECRET,
+  session: { strategy: 'jwt' },
+  ...authConfig,
+});
+```
+
+## session에 커스텀 필드 추가하기
+
+스키마를 수정하여 추가 정보를 입력한다.
+
+```schema
+enum UserRole {
+  ADMIN
+  USER
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+  role          UserRole  @default(USER)
+  accounts      Account[]
+}
+```
+
+```shell
+npx prisma generate
+npx prisma migrate reset
+npx prisma db push
+```
+
+그리고 jwt 콜백에서 token에 role 필드를 추가하면 sessio 콜백의 token에서 확인할 수 있다.
+
+```ts
+import NextAuth from 'next-auth';
+import { PrismaAdapter } from '@auth/prisma-adapter';
+
+import { db } from '@/lib/db';
+import { getUserById } from '@/data/user';
+import authConfig from '@/auth.config';
+
+export const {
+  handlers: { GET, POST },
+  auth,
+  signIn,
+  signOut,
+} = NextAuth({
+  callbacks: {
+    async session({ token, session }) {
+      if (token.sub && session.user) {
+        session.user.id = token.sub;
+      }
+      // 2. session 콜백의 token에서 role 필드를 확인할 수 있다.
+      // 3. session에 token.role을 추가한다.
+      // 4. TODO: session typescript 에러 수정하기
+      if (token.role && session.user) {
+        session.user.role = token.role;
+      }
+      return session;
+    },
+    async jwt({ token }) {
+      if (!token.sub) return token;
+      const existingUser = await getUserById(token.sub);
+      if (!existingUser) return token;
+      // 1. token에 role 필드를 추가한다.
+      token.role = existingUser.role;
+      return token;
+    },
+  },
+  adapter: PrismaAdapter(db),
+  secret: process.env.AUTH_SECRET,
+  session: { strategy: 'jwt' },
+  ...authConfig,
+});
+```
+
+session에 커스텀 필드를 추가하여 타입스크립트 에러가 발생하므로 수정해야 한다.
+
+https://authjs.dev/getting-started/typescript
+
+위 문서를 참고하여 다음과 같이 진행한다.
+
+```ts
+import { UserRole } from '@prisma/client';
+
+declare module 'next-auth' {
+  interface User {
+    /** The user's postal address. */
+    role: UserRole;
+  }
+}
+
+// ...
+    async session({ token, session }) {
+      if (token.sub && session.user) {
+        session.user.id = token.sub;
+      }
+      if (token.role && session.user) {
+        session.user.role = token.role as UserRole;
+      }
+      return session;
+    },
+```
