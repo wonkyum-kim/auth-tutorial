@@ -6,17 +6,20 @@ import bcrypt from 'bcryptjs';
 import { db } from '@/lib/db';
 import { RegisterSchema } from '@/schemas';
 import { getUserByEmail } from '@/data/user';
+import { generateVerificationToken } from '@/lib/tokens';
+import { sendVerificationEmail } from '@/lib/mail';
 
 export async function register(values: z.infer<typeof RegisterSchema>) {
   const validatedFields = RegisterSchema.safeParse(values);
   if (!validatedFields.success) return { error: 'Invalid fields!' };
 
   const { email, password, name } = validatedFields.data;
-  const hashedPassword = await bcrypt.hash(password, 10);
 
+  // 이미 등록된 사용자인지 확인한다.
   const existingUser = await getUserByEmail(email);
-
   if (existingUser) return { error: 'Email already in use!' };
+
+  const hashedPassword = await bcrypt.hash(password, 10);
 
   await db.user.create({
     data: {
@@ -26,7 +29,9 @@ export async function register(values: z.infer<typeof RegisterSchema>) {
     },
   });
 
-  // TODO: Send verification token email
+  const verificationToken = await generateVerificationToken(email);
 
-  return { success: 'User created!' };
+  await sendVerificationEmail(verificationToken.email, verificationToken.token);
+
+  return { success: 'Confirmation email sent!' };
 }
