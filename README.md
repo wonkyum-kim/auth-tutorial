@@ -1087,3 +1087,12 @@ if (!existingUser.emailVerified) {
   return { success: 'Confirmation email sent' };
 }
 ```
+
+## public route 추가 & 페이지 만들기 & 서버 액션
+
+이메일의 링크를 클릭하고 접속하는 곳을 public에 추가한다.
+
+```ts
+// route.ts
+export const publicRoutes = ['/', '/auth/new-verification'];
+```
